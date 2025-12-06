@@ -44,6 +44,9 @@ def _init_mappings():
     POLARS_TO_PYSPARK[pl.UInt64] = (
         spark_types.LongType
     )  # PySpark doesn't have UInt64, use LongType
+    POLARS_TO_PYSPARK[pl.Int128] = (
+        spark_types.DecimalType
+    )  # PySpark doesn't support Int128, use DecimalType
     POLARS_TO_PYSPARK[pl.Float32] = spark_types.FloatType
     POLARS_TO_PYSPARK[pl.Float64] = spark_types.DoubleType
 
@@ -53,12 +56,23 @@ def _init_mappings():
     # String types
     POLARS_TO_PYSPARK[pl.String] = spark_types.StringType
     POLARS_TO_PYSPARK[pl.Utf8] = spark_types.StringType
+    POLARS_TO_PYSPARK[pl.Categorical] = (
+        spark_types.StringType
+    )  # Categorical maps to StringType
+    POLARS_TO_PYSPARK[pl.Enum] = spark_types.StringType  # Enum maps to StringType
 
     # Date and time types
     POLARS_TO_PYSPARK[pl.Date] = spark_types.DateType
     POLARS_TO_PYSPARK[pl.Datetime] = spark_types.TimestampType
     POLARS_TO_PYSPARK[pl.Time] = spark_types.TimestampType  # Time maps to TimestampType
     POLARS_TO_PYSPARK[pl.Duration] = spark_types.StringType  # Duration as string
+
+    # Decimal and Binary types
+    POLARS_TO_PYSPARK[pl.Decimal] = spark_types.DecimalType
+    POLARS_TO_PYSPARK[pl.Binary] = spark_types.BinaryType
+
+    # Null type
+    POLARS_TO_PYSPARK[pl.Null] = spark_types.NullType
 
     # Complex types are handled specially in converters
     # List, Struct, Object, Map are converted recursively
@@ -74,8 +88,16 @@ def _init_mappings():
     PYSPARK_TO_POLARS[spark_types.DoubleType] = pl.Float64
     PYSPARK_TO_POLARS[spark_types.BooleanType] = pl.Boolean
     PYSPARK_TO_POLARS[spark_types.StringType] = pl.String
+    PYSPARK_TO_POLARS[spark_types.VarcharType] = pl.String  # Varchar maps to String
+    PYSPARK_TO_POLARS[spark_types.CharType] = pl.String  # Char maps to String
     PYSPARK_TO_POLARS[spark_types.DateType] = pl.Date
     PYSPARK_TO_POLARS[spark_types.TimestampType] = pl.Datetime
+    PYSPARK_TO_POLARS[spark_types.TimestampNTZType] = (
+        pl.Datetime
+    )  # Timestamp without timezone
+    PYSPARK_TO_POLARS[spark_types.DecimalType] = pl.Decimal
+    PYSPARK_TO_POLARS[spark_types.BinaryType] = pl.Binary
+    PYSPARK_TO_POLARS[spark_types.NullType] = pl.Null
 
     # Complex types are handled specially in converters
 
@@ -121,9 +143,12 @@ def get_pyspark_type(polars_type: Any) -> Type:
     if polars_type_class in POLARS_TO_PYSPARK:
         return POLARS_TO_PYSPARK[polars_type_class]
 
+    # Provide helpful error message with suggestions
+    supported = [str(t.__name__) for t in POLARS_TO_PYSPARK.keys()]
     raise UnsupportedTypeError(
         f"Unsupported Polars type: {polars_type_class}. "
-        f"Supported types: {list(POLARS_TO_PYSPARK.keys())}"
+        f"Supported types: {', '.join(supported)}. "
+        "If you're using a complex type (List, Struct, Map), ensure it's used correctly."
     )
 
 
@@ -164,7 +189,10 @@ def get_polars_type(pyspark_type: Any) -> Type:
     if pyspark_type_class in PYSPARK_TO_POLARS:
         return PYSPARK_TO_POLARS[pyspark_type_class]
 
+    # Provide helpful error message with suggestions
+    supported = [str(t.__name__) for t in PYSPARK_TO_POLARS.keys()]
     raise UnsupportedTypeError(
         f"Unsupported PySpark type: {pyspark_type_class}. "
-        f"Supported types: {list(PYSPARK_TO_POLARS.keys())}"
+        f"Supported types: {', '.join(supported)}. "
+        "If you're using a complex type (ArrayType, StructType, MapType), ensure it's used correctly."
     )

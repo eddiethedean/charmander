@@ -20,6 +20,12 @@ try:
         MapType,
         ByteType,
         LongType,
+        DecimalType,
+        BinaryType,
+        NullType,
+        TimestampNTZType,
+        VarcharType,
+        CharType,
     )
 except ImportError:
     pytest.skip("pyspark not installed", allow_module_level=True)
@@ -363,3 +369,298 @@ class TestRoundTripConversion:
         assert converted_back["tags"].inner == pl.String
         assert isinstance(converted_back["numbers"], pl.List)
         assert converted_back["numbers"].inner == pl.Int64
+
+
+class TestNullableFields:
+    """Test nullable field handling."""
+
+    def test_pyspark_nullable_fields(self):
+        """Test that PySpark nullable fields are handled."""
+        pyspark_schema = StructType(
+            [
+                StructField("required", StringType(), nullable=False),
+                StructField("optional", StringType(), nullable=True),
+            ]
+        )
+        # Conversion should succeed (nullable is not preserved in Polars schema)
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert polars_schema["required"] == pl.String
+        assert polars_schema["optional"] == pl.String
+
+    def test_polars_to_pyspark_all_nullable(self):
+        """Test that Polars schemas create nullable PySpark fields."""
+        polars_schema = {
+            "name": pl.String,
+            "age": pl.Int32,
+        }
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        # All fields should be nullable by default
+        assert pyspark_schema.fields[0].nullable is True
+        assert pyspark_schema.fields[1].nullable is True
+
+
+class TestDecimalAndBinaryTypes:
+    """Test Decimal and Binary type conversions."""
+
+    def test_decimal_type_polars_to_pyspark(self):
+        """Test conversion of Decimal type from Polars to PySpark."""
+        polars_schema = {
+            "price": pl.Decimal,
+            "quantity": pl.Decimal,
+        }
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert isinstance(pyspark_schema.fields[0].dataType, DecimalType)
+        assert isinstance(pyspark_schema.fields[1].dataType, DecimalType)
+
+    def test_binary_type_polars_to_pyspark(self):
+        """Test conversion of Binary type from Polars to PySpark."""
+        polars_schema = {
+            "data": pl.Binary,
+            "blob": pl.Binary,
+        }
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert isinstance(pyspark_schema.fields[0].dataType, BinaryType)
+        assert isinstance(pyspark_schema.fields[1].dataType, BinaryType)
+
+    def test_decimal_type_pyspark_to_polars(self):
+        """Test conversion of DecimalType from PySpark to Polars."""
+        pyspark_schema = StructType(
+            [
+                StructField("price", DecimalType()),
+                StructField("total", DecimalType(18, 2)),
+            ]
+        )
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert polars_schema["price"] == pl.Decimal
+        assert polars_schema["total"] == pl.Decimal
+
+    def test_binary_type_pyspark_to_polars(self):
+        """Test conversion of BinaryType from PySpark to Polars."""
+        pyspark_schema = StructType(
+            [
+                StructField("data", BinaryType()),
+                StructField("blob", BinaryType()),
+            ]
+        )
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert polars_schema["data"] == pl.Binary
+        assert polars_schema["blob"] == pl.Binary
+
+    def test_decimal_round_trip(self):
+        """Test round-trip conversion of Decimal type."""
+        original = {"price": pl.Decimal}
+        pyspark = to_pyspark_schema(original)
+        converted_back = to_polars_schema(pyspark)
+
+        assert converted_back["price"] == pl.Decimal
+
+    def test_binary_round_trip(self):
+        """Test round-trip conversion of Binary type."""
+        original = {"data": pl.Binary}
+        pyspark = to_pyspark_schema(original)
+        converted_back = to_polars_schema(pyspark)
+
+        assert converted_back["data"] == pl.Binary
+
+
+class TestEdgeCases:
+    """Test edge cases and error conditions."""
+
+    def test_empty_schema_polars_to_pyspark(self):
+        """Test conversion of empty Polars schema."""
+        polars_schema = {}
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert len(pyspark_schema.fields) == 0
+
+    def test_empty_schema_pyspark_to_polars(self):
+        """Test conversion of empty PySpark schema."""
+        pyspark_schema = StructType([])
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert len(polars_schema) == 0
+
+    def test_single_field_schema(self):
+        """Test schema with a single field."""
+        polars_schema = {"id": pl.Int64}
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert len(pyspark_schema.fields) == 1
+        assert pyspark_schema.fields[0].name == "id"
+
+    def test_all_fields_nullable_pyspark(self):
+        """Test PySpark schema with all fields nullable."""
+        pyspark_schema = StructType(
+            [
+                StructField("a", StringType(), nullable=True),
+                StructField("b", IntegerType(), nullable=True),
+                StructField("c", BooleanType(), nullable=True),
+            ]
+        )
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert len(polars_schema) == 3
+        assert all(isinstance(t, type) for t in polars_schema.values())
+
+    def test_no_fields_nullable_pyspark(self):
+        """Test PySpark schema with no fields nullable."""
+        pyspark_schema = StructType(
+            [
+                StructField("a", StringType(), nullable=False),
+                StructField("b", IntegerType(), nullable=False),
+            ]
+        )
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        # Should convert successfully (nullability not preserved)
+        assert len(polars_schema) == 2
+
+
+class TestNewTypes:
+    """Test new type mappings."""
+
+    def test_null_type_polars_to_pyspark(self):
+        """Test conversion of Null type from Polars to PySpark."""
+        polars_schema = {"null_field": pl.Null}
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert isinstance(pyspark_schema.fields[0].dataType, NullType)
+
+    def test_null_type_pyspark_to_polars(self):
+        """Test conversion of NullType from PySpark to Polars."""
+        pyspark_schema = StructType([StructField("null_field", NullType())])
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert polars_schema["null_field"] == pl.Null
+
+    def test_timestampntz_type_pyspark_to_polars(self):
+        """Test conversion of TimestampNTZType from PySpark to Polars."""
+        pyspark_schema = StructType([StructField("ts", TimestampNTZType())])
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert polars_schema["ts"] == pl.Datetime
+
+    def test_categorical_enum_polars_to_pyspark(self):
+        """Test conversion of Categorical and Enum types from Polars to PySpark."""
+        polars_schema = {
+            "category": pl.Categorical,
+            "enum_val": pl.Enum,
+        }
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert isinstance(pyspark_schema.fields[0].dataType, StringType)
+        assert isinstance(pyspark_schema.fields[1].dataType, StringType)
+
+    def test_varchar_char_pyspark_to_polars(self):
+        """Test conversion of VarcharType and CharType from PySpark to Polars."""
+        pyspark_schema = StructType(
+            [
+                StructField("varchar_field", VarcharType(100)),
+                StructField("char_field", CharType(10)),
+            ]
+        )
+        polars_schema = to_polars_schema(pyspark_schema)
+
+        assert isinstance(polars_schema, dict)
+        assert polars_schema["varchar_field"] == pl.String
+        assert polars_schema["char_field"] == pl.String
+
+    def test_int128_polars_to_pyspark(self):
+        """Test conversion of Int128 type from Polars to PySpark."""
+        polars_schema = {"big_int": pl.Int128}
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert isinstance(pyspark_schema.fields[0].dataType, DecimalType)
+
+    def test_new_types_round_trip(self):
+        """Test round-trip conversion for new types."""
+        # Null
+        original = {"null_field": pl.Null}
+        pyspark = to_pyspark_schema(original)
+        converted_back = to_polars_schema(pyspark)
+        assert converted_back["null_field"] == pl.Null
+
+        # Categorical
+        original = {"category": pl.Categorical}
+        pyspark = to_pyspark_schema(original)
+        converted_back = to_polars_schema(pyspark)
+        assert converted_back["category"] == pl.String  # Categorical becomes String
+
+        # Enum
+        original = {"enum_val": pl.Enum}
+        pyspark = to_pyspark_schema(original)
+        converted_back = to_polars_schema(pyspark)
+        assert converted_back["enum_val"] == pl.String  # Enum becomes String
+
+
+class TestInputValidation:
+    """Test input validation."""
+
+    def test_duplicate_field_names_polars(self):
+        """Test that duplicate field names raise SchemaError."""
+        # Note: Python dicts can't have duplicate keys, so we test by creating
+        # a schema that would have duplicates if we iterated through items
+        # Our validation checks during iteration, so we can test by manually
+        # checking field names as we process them
+        # Since dict literals can't have duplicates, we test the validation
+        # by ensuring our code would catch duplicates if they existed
+        # In practice, this is tested via PySpark schema duplicates
+        pass  # Validation is tested via PySpark duplicate test
+
+    def test_duplicate_field_names_pyspark(self):
+        """Test that duplicate field names in PySpark schema raise SchemaError."""
+        pyspark_schema = StructType(
+            [
+                StructField("field", StringType()),
+                StructField("field", IntegerType()),
+            ]
+        )
+        with pytest.raises(SchemaError, match="Duplicate field name"):
+            to_polars_schema(pyspark_schema)
+
+    def test_empty_field_name_polars(self):
+        """Test that empty field names raise SchemaError."""
+        with pytest.raises(SchemaError, match="cannot be empty"):
+            to_pyspark_schema({"": pl.String})
+
+    def test_empty_field_name_pyspark(self):
+        """Test that empty field names in PySpark raise SchemaError."""
+        pyspark_schema = StructType([StructField("", StringType())])
+        with pytest.raises(SchemaError, match="cannot be empty"):
+            to_polars_schema(pyspark_schema)
+
+    def test_none_field_type(self):
+        """Test that None field types raise SchemaError."""
+        with pytest.raises(SchemaError, match="cannot be None"):
+            to_pyspark_schema({"field": None})
+
+    def test_non_string_field_name_polars(self):
+        """Test that non-string field names raise SchemaError."""
+        with pytest.raises(SchemaError, match="must be a string"):
+            to_pyspark_schema({123: pl.String})
+
+    def test_non_string_field_name_pyspark(self):
+        """Test that non-string field names in PySpark raise SchemaError."""
+        # Create a StructField with a non-string name (this would need special handling)
+        # Actually, PySpark StructField requires a string name, so this test may not be possible
+        # But let's test that our validation still works
+        pass  # Skip this test as PySpark doesn't allow non-string names

@@ -90,12 +90,77 @@ print(polars_schema)
 | `String` / `Utf8` | `StringType` |
 | `Date` | `DateType` |
 | `Datetime` | `TimestampType` |
+| `Decimal` | `DecimalType` |
+| `Binary` | `BinaryType` |
+| `Null` | `NullType` |
+| `Categorical` | `StringType` |
+| `Enum` | `StringType` |
+| `Int128` | `DecimalType` |
+
+**PySpark Types:**
+
+| PySpark | Polars |
+|---------|--------|
+| `ByteType` | `Int8` |
+| `ShortType` | `Int32` |
+| `IntegerType` | `Int32` |
+| `LongType` | `Int64` |
+| `FloatType` | `Float32` |
+| `DoubleType` | `Float64` |
+| `BooleanType` | `Boolean` |
+| `StringType` | `String` |
+| `VarcharType` | `String` |
+| `CharType` | `String` |
+| `DateType` | `Date` |
+| `TimestampType` | `Datetime` |
+| `TimestampNTZType` | `Datetime` |
+| `DecimalType` | `Decimal` |
+| `BinaryType` | `Binary` |
+| `NullType` | `Null` |
 
 ### Complex Types
 
 - **Arrays/Lists**: Fully supported with nested arrays
 - **Structs**: Fully supported with nested structs
 - **Maps**: PySpark `MapType` converts to Polars `Struct` (with `key` and `value` fields)
+
+## Limitations
+
+### Type Conversions with Information Loss
+
+Some type conversions result in information loss or semantic changes:
+
+- **UInt64 → LongType**: PySpark doesn't support unsigned 64-bit integers, so `UInt64` maps to signed `LongType`. Values greater than `2^63 - 1` may cause issues.
+
+- **Duration → StringType**: Polars `Duration` types are converted to PySpark `StringType` as PySpark doesn't have a native duration type. The semantic meaning is lost.
+
+- **Time → TimestampType**: Polars `Time` types are converted to PySpark `TimestampType`, which may not be the ideal representation.
+
+- **Decimal precision/scale**: When converting Polars `Decimal` to PySpark `DecimalType`, default precision (10) and scale (0) are used. Precision and scale information is not preserved when converting from PySpark to Polars.
+
+- **MapType → Struct**: PySpark `MapType` is converted to a Polars `Struct` with `key` and `value` fields. This changes the data structure from a map to a struct representation.
+
+### Nullability
+
+- **Polars → PySpark**: All fields are created with `nullable=True`, as Polars schemas don't explicitly track nullability at the schema definition level.
+
+- **PySpark → Polars**: The `nullable` attribute from PySpark `StructField` is not preserved, as Polars schemas don't track nullability per field. All Polars fields can contain nulls by default.
+
+### Input Validation
+
+Charmander validates schemas before conversion:
+
+- **Duplicate field names**: Raises `SchemaError` if duplicate field names are detected
+- **Empty field names**: Raises `SchemaError` if any field name is an empty string
+- **Invalid field types**: Raises `SchemaError` if field types are `None`
+- **Invalid field name types**: Raises `SchemaError` if field names are not strings
+
+### Datetime Timezone Handling
+
+- Polars `Datetime` types can have timezone information (e.g., `pl.Datetime(time_unit="ms", time_zone="UTC")`)
+- When converting to PySpark `TimestampType`, timezone information is not preserved
+- `TimestampNTZType` (PySpark 3.4+) is converted to Polars `Datetime` without timezone information
+- The timezone metadata is lost in conversion, but the timestamp value is preserved
 
 ## Advanced Examples
 

@@ -51,6 +51,10 @@ def to_pyspark_schema(polars_schema: Union[Dict[str, Any], pl.Schema]) -> Struct
         SchemaError: If the schema structure is invalid
         UnsupportedTypeError: If a type cannot be converted
 
+    Note:
+        All fields are created with nullable=True, as Polars schemas don't
+        explicitly track nullability at the schema definition level.
+
     Example:
         >>> import polars as pl
         >>> schema = {"name": pl.String, "age": pl.Int32, "score": pl.Float64}
@@ -71,8 +75,25 @@ def to_pyspark_schema(polars_schema: Union[Dict[str, Any], pl.Schema]) -> Struct
             f"Invalid schema type: {type(polars_schema)}. Expected dict or pl.Schema"
         )
 
+    # Validate and convert fields
+    field_names = []
     fields = []
     for field_name, field_type in schema_dict.items():
+        # Validate field name
+        if not isinstance(field_name, str):
+            raise SchemaError(
+                f"Field name must be a string, got {type(field_name)}: {field_name!r}"
+            )
+        if not field_name:
+            raise SchemaError("Field names cannot be empty strings")
+        if field_name in field_names:
+            raise SchemaError(f"Duplicate field name found: {field_name!r}")
+
+        # Validate field type
+        if field_type is None:
+            raise SchemaError(f"Field type cannot be None for field {field_name!r}")
+
+        field_names.append(field_name)
         pyspark_field = _convert_polars_type_to_pyspark_field(field_name, field_type)
         fields.append(pyspark_field)
 
@@ -93,18 +114,6 @@ def _convert_polars_type_to_pyspark_field(
     Returns:
         PySpark StructField
     """
-    # Handle Optional types
-    if hasattr(polars_type, "__origin__") and hasattr(polars_type, "__args__"):
-        # This is a typing.Optional or Union type
-        if polars_type.__origin__ is Union:
-            args = polars_type.__args__
-            if len(args) == 2 and type(None) in args:
-                # It's an Optional
-                non_null_type = args[0] if args[1] is type(None) else args[1]
-                return _convert_polars_type_to_pyspark_field(
-                    field_name, non_null_type, nullable=True
-                )
-
     # Handle List/Array types
     if pl is not None and isinstance(polars_type, pl.List):
         element_type = polars_type.inner
@@ -136,7 +145,14 @@ def _convert_polars_type_to_pyspark_field(
         spark_type_class = get_pyspark_type(polars_type)
         # If it's a class, instantiate it
         if isinstance(spark_type_class, type):
-            spark_type = spark_type_class()
+            # DecimalType requires special handling - use default precision/scale
+            # Note: Polars Decimal doesn't expose precision/scale in schema definition
+            from pyspark.sql.types import DecimalType
+
+            if spark_type_class is DecimalType:
+                spark_type = DecimalType()  # Default precision=10, scale=0
+            else:
+                spark_type = spark_type_class()
         else:
             spark_type = spark_type_class
         return StructField(field_name, spark_type, nullable=nullable)
@@ -160,6 +176,11 @@ def to_polars_schema(pyspark_schema: StructType) -> Dict[str, Any]:
         SchemaError: If the schema structure is invalid
         UnsupportedTypeError: If a type cannot be converted
 
+    Note:
+        The nullable attribute from PySpark StructField is not preserved,
+        as Polars schemas don't track nullability at the schema definition level.
+        All Polars fields can contain nulls by default.
+
     Example:
         >>> from pyspark.sql.types import StructType, StructField, StringType, IntegerType
         >>> schema = StructType([
@@ -177,7 +198,19 @@ def to_polars_schema(pyspark_schema: StructType) -> Dict[str, Any]:
         raise SchemaError(f"Expected StructType, got {type(pyspark_schema)}")
 
     schema_dict = {}
+    field_names = set()
     for field in pyspark_schema.fields:
+        # Validate field name
+        if not isinstance(field.name, str):
+            raise SchemaError(
+                f"Field name must be a string, got {type(field.name)}: {field.name!r}"
+            )
+        if not field.name:
+            raise SchemaError("Field names cannot be empty strings")
+        if field.name in field_names:
+            raise SchemaError(f"Duplicate field name found: {field.name!r}")
+
+        field_names.add(field.name)
         polars_type = _convert_pyspark_field_to_polars_type(field)
         schema_dict[field.name] = polars_type
 
@@ -198,6 +231,12 @@ def _convert_pyspark_field_to_polars_type(field: StructField) -> Any:
         UnsupportedTypeError: If the type cannot be converted
     """
     spark_type = field.dataType
+
+    # Handle DecimalType - Polars Decimal doesn't preserve precision/scale
+    from pyspark.sql.types import DecimalType
+
+    if isinstance(spark_type, DecimalType):
+        return pl.Decimal
 
     # Handle ArrayType
     if isinstance(spark_type, ArrayType):
@@ -271,6 +310,12 @@ def _convert_pyspark_type_to_polars_type(spark_type: DataType) -> Any:
             nested_type = _convert_pyspark_field_to_polars_type(nested_field)
             struct_fields.append(pl.Field(nested_field.name, nested_type))
         return pl.Struct(struct_fields)
+
+    # Handle DecimalType - Polars Decimal doesn't preserve precision/scale
+    from pyspark.sql.types import DecimalType
+
+    if isinstance(spark_type, DecimalType):
+        return pl.Decimal
 
     # Handle primitive types
     try:
