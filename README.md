@@ -1,5 +1,7 @@
 # Charmander
 
+**C**ross-platform **H**andling of **A**rray, **R**ecursive, **M**apping, **A**nd **N**ested **D**ata **E**xchange **R**untime
+
 Convert between Polars schemas and PySpark schemas with ease.
 
 Charmander provides simple, bidirectional conversion functions to transform schemas between Polars and PySpark, supporting all complex types including nested structures, arrays, and maps.
