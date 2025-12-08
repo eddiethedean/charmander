@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Convert between Polars schemas and PySpark schemas"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     {name = "Odos Matthews", email = "odosmatthews@gmail.com"}
@@ -17,7 +17,6 @@ keywords = ["polars", "pyspark", "schema", "conversion"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
