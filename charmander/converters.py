@@ -1,6 +1,6 @@
 """Core conversion functions between Polars and PySpark schemas."""
 
-from typing import TYPE_CHECKING, Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Literal, Union
 
 if TYPE_CHECKING:
     import polars as pl
@@ -35,14 +35,24 @@ else:
 from charmander.errors import SchemaError, UnsupportedTypeError
 from charmander.type_mappings import get_pyspark_type, get_polars_type
 
+# Constants for default Polars type parameters
+# Polars Schema requires fully-specified types for Decimal and Datetime
+DEFAULT_DECIMAL_PRECISION = 38
+DEFAULT_DECIMAL_SCALE = 10
+DEFAULT_DATETIME_TIME_UNIT: Literal["ns"] = "ns"
 
-def to_pyspark_schema(polars_schema: Union[Dict[str, Any], pl.Schema]) -> StructType:
+
+def to_pyspark_schema(
+    polars_schema: Union[Dict[str, Any], pl.Schema, Iterable[tuple[str, Any]]],
+) -> StructType:
     """
     Convert a Polars schema to a PySpark StructType.
 
     Args:
-        polars_schema: Polars schema as a dictionary mapping field names to types,
-                      or a polars.Schema object
+        polars_schema: Polars schema in any supported format:
+            - pl.Schema object
+            - dict[str, pl.DataType]: Dictionary mapping field names to types
+            - Iterable[tuple[str, pl.DataType]]: Iterable of (field_name, type) tuples
 
     Returns:
         PySpark StructType representing the converted schema
@@ -57,7 +67,14 @@ def to_pyspark_schema(polars_schema: Union[Dict[str, Any], pl.Schema]) -> Struct
 
     Example:
         >>> import polars as pl
+        >>> # Format 1: Dictionary
         >>> schema = {"name": pl.String, "age": pl.Int32, "score": pl.Float64}
+        >>> pyspark_schema = to_pyspark_schema(schema)
+        >>> # Format 2: pl.Schema object
+        >>> schema = pl.Schema({"name": pl.String, "age": pl.Int32})
+        >>> pyspark_schema = to_pyspark_schema(schema)
+        >>> # Format 3: List of tuples
+        >>> schema = [("name", pl.String), ("age", pl.Int32), ("score", pl.Float64)]
         >>> pyspark_schema = to_pyspark_schema(schema)
     """
     if pl is None:
@@ -67,12 +84,74 @@ def to_pyspark_schema(polars_schema: Union[Dict[str, Any], pl.Schema]) -> Struct
 
     # Convert polars.Schema to dict if needed
     if isinstance(polars_schema, pl.Schema):
-        schema_dict = dict(polars_schema)
+        try:
+            schema_dict = dict(polars_schema)
+        except (TypeError, ValueError) as e:
+            raise SchemaError(
+                f"Failed to convert pl.Schema to dictionary: {e}. "
+                "Please ensure the schema is valid."
+            )
     elif isinstance(polars_schema, dict):
         schema_dict = polars_schema
+    elif isinstance(polars_schema, (list, tuple)):
+        # Check if it's an iterable of tuples
+        # Handle empty iterables
+        if len(polars_schema) == 0:
+            schema_dict = {}
+        else:
+            # Validate that all items are tuples of length 2 with string field names
+            validated_items = []
+            for i, item in enumerate(polars_schema):
+                if not isinstance(item, tuple):
+                    raise SchemaError(
+                        f"Invalid schema format: {type(polars_schema)}. "
+                        "Expected iterable of (field_name, type) tuples. "
+                        f"Item at index {i} is not a tuple: {item!r}"
+                    )
+                if len(item) != 2:
+                    raise SchemaError(
+                        f"Invalid schema format: {type(polars_schema)}. "
+                        "Expected iterable of (field_name, type) tuples. "
+                        f"Item at index {i} has length {len(item)}, expected 2: {item!r}"
+                    )
+                field_name, field_type = item
+                if not isinstance(field_name, str):
+                    raise SchemaError(
+                        f"Invalid schema format: {type(polars_schema)}. "
+                        "Field names must be strings. "
+                        f"Item at index {i} has non-string field name: {field_name!r} (type: {type(field_name).__name__})"
+                    )
+                if not field_name:
+                    raise SchemaError(
+                        f"Invalid schema format: {type(polars_schema)}. "
+                        "Field names cannot be empty strings. "
+                        f"Item at index {i} has empty field name"
+                    )
+                validated_items.append((field_name, field_type))
+
+            # Check for duplicate field names before converting to dict
+            field_names_seen = set()
+            for field_name, _ in validated_items:
+                if field_name in field_names_seen:
+                    raise SchemaError(
+                        f"Invalid schema format: {type(polars_schema)}. "
+                        f"Duplicate field name found: {field_name!r}"
+                    )
+                field_names_seen.add(field_name)
+
+            # Convert to dict
+            try:
+                schema_dict = dict(validated_items)
+            except TypeError as e:
+                raise SchemaError(
+                    f"Invalid schema format: {type(polars_schema)}. "
+                    "Could not convert iterable to dictionary. "
+                    f"Error: {e}"
+                )
     else:
         raise SchemaError(
-            f"Invalid schema type: {type(polars_schema)}. Expected dict or pl.Schema"
+            f"Invalid schema type: {type(polars_schema)}. "
+            "Expected dict, pl.Schema, or Iterable[tuple[str, pl.DataType]]"
         )
 
     # Validate and convert fields
@@ -162,15 +241,15 @@ def _convert_polars_type_to_pyspark_field(
         )
 
 
-def to_polars_schema(pyspark_schema: StructType) -> Dict[str, Any]:
+def to_polars_schema(pyspark_schema: StructType) -> pl.Schema:
     """
-    Convert a PySpark StructType to a Polars schema dictionary.
+    Convert a PySpark StructType to a Polars schema.
 
     Args:
         pyspark_schema: PySpark StructType to convert
 
     Returns:
-        Dictionary mapping field names to Polars types
+        Polars Schema object mapping field names to Polars types
 
     Raises:
         SchemaError: If the schema structure is invalid
@@ -188,6 +267,8 @@ def to_polars_schema(pyspark_schema: StructType) -> Dict[str, Any]:
         ...     StructField("age", IntegerType())
         ... ])
         >>> polars_schema = to_polars_schema(schema)
+        >>> # Use directly with Polars DataFrame
+        >>> df = pl.DataFrame({}, schema=polars_schema)
     """
     if pl is None:
         raise ImportError("polars is not installed")
@@ -214,10 +295,13 @@ def to_polars_schema(pyspark_schema: StructType) -> Dict[str, Any]:
         polars_type = _convert_pyspark_field_to_polars_type(field)
         schema_dict[field.name] = polars_type
 
-    return schema_dict
+    return pl.Schema(schema_dict)
 
 
-def _convert_pyspark_field_to_polars_type(field: StructField) -> Any:
+def _convert_pyspark_field_to_polars_type(field: StructField) -> Any:  # type: ignore[no-any-return]
+    # Returns: Union[pl.DataType, Type[pl.DataType], pl.List, pl.Struct]
+    # Polars types can be classes (pl.String) or instances (pl.Decimal(...), pl.Datetime(...))
+    # or complex types (pl.List(...), pl.Struct(...)), so Any is used for flexibility
     """
     Convert a PySpark StructField to a Polars type.
 
@@ -233,10 +317,14 @@ def _convert_pyspark_field_to_polars_type(field: StructField) -> Any:
     spark_type = field.dataType
 
     # Handle DecimalType - Polars Decimal doesn't preserve precision/scale
+    # Use default precision/scale for Schema creation
     from pyspark.sql.types import DecimalType
 
     if isinstance(spark_type, DecimalType):
-        return pl.Decimal
+        # Polars Schema requires fully-specified types, so instantiate with defaults
+        return pl.Decimal(
+            precision=DEFAULT_DECIMAL_PRECISION, scale=DEFAULT_DECIMAL_SCALE
+        )
 
     # Handle ArrayType
     if isinstance(spark_type, ArrayType):
@@ -267,6 +355,13 @@ def _convert_pyspark_field_to_polars_type(field: StructField) -> Any:
     # Handle primitive types
     try:
         polars_type_class = get_polars_type(spark_type)
+        # Polars Schema requires fully-specified types for Decimal and Datetime
+        if polars_type_class is pl.Decimal:
+            return pl.Decimal(
+                precision=DEFAULT_DECIMAL_PRECISION, scale=DEFAULT_DECIMAL_SCALE
+            )
+        elif polars_type_class is pl.Datetime:
+            return pl.Datetime(time_unit=DEFAULT_DATETIME_TIME_UNIT)
         return polars_type_class
     except UnsupportedTypeError:
         raise UnsupportedTypeError(
@@ -274,7 +369,10 @@ def _convert_pyspark_field_to_polars_type(field: StructField) -> Any:
         )
 
 
-def _convert_pyspark_type_to_polars_type(spark_type: DataType) -> Any:
+def _convert_pyspark_type_to_polars_type(spark_type: DataType) -> Any:  # type: ignore[no-any-return]
+    # Returns: Union[pl.DataType, Type[pl.DataType], pl.List, pl.Struct]
+    # Polars types can be classes (pl.String) or instances (pl.Decimal(...), pl.Datetime(...))
+    # or complex types (pl.List(...), pl.Struct(...)), so Any is used for flexibility
     """
     Convert a PySpark DataType to a Polars type (helper for nested types).
 
@@ -315,11 +413,21 @@ def _convert_pyspark_type_to_polars_type(spark_type: DataType) -> Any:
     from pyspark.sql.types import DecimalType
 
     if isinstance(spark_type, DecimalType):
-        return pl.Decimal
+        # Polars Schema requires fully-specified types, so instantiate with defaults
+        return pl.Decimal(
+            precision=DEFAULT_DECIMAL_PRECISION, scale=DEFAULT_DECIMAL_SCALE
+        )
 
     # Handle primitive types
     try:
         polars_type_class = get_polars_type(spark_type)
+        # Polars Schema requires fully-specified types for Decimal and Datetime
+        if polars_type_class is pl.Decimal:
+            return pl.Decimal(
+                precision=DEFAULT_DECIMAL_PRECISION, scale=DEFAULT_DECIMAL_SCALE
+            )
+        elif polars_type_class is pl.Datetime:
+            return pl.Datetime(time_unit=DEFAULT_DATETIME_TIME_UNIT)
         return polars_type_class
     except UnsupportedTypeError:
         raise UnsupportedTypeError(

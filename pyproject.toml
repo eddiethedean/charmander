@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "charmander"
-version = "0.1.0"
+version = "0.2.0"
 description = "Convert between Polars schemas and PySpark schemas"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
+license-files = ["LICENSE"]
 authors = [
     {name = "Odos Matthews", email = "odosmatthews@gmail.com"}
 ]
@@ -33,6 +34,9 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "types-pyspark>=3.0.0",
 ]
 
 [tool.setuptools]

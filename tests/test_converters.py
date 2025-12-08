@@ -71,6 +71,99 @@ class TestPolarsToPySparkConversion:
         assert isinstance(pyspark_schema, StructType)
         assert len(pyspark_schema.fields) == 2
 
+    def test_iterable_tuple_format_conversion(self):
+        """Test conversion using list of tuples format."""
+        polars_schema = [
+            ("name", pl.String),
+            ("age", pl.Int32),
+            ("score", pl.Float64),
+        ]
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert len(pyspark_schema.fields) == 3
+        assert pyspark_schema.fields[0].name == "name"
+        assert isinstance(pyspark_schema.fields[0].dataType, StringType)
+        assert pyspark_schema.fields[1].name == "age"
+        assert isinstance(pyspark_schema.fields[1].dataType, IntegerType)
+        assert pyspark_schema.fields[2].name == "score"
+        assert isinstance(pyspark_schema.fields[2].dataType, DoubleType)
+
+    def test_iterable_tuple_of_tuples_format(self):
+        """Test conversion using tuple of tuples format."""
+        polars_schema = (
+            ("id", pl.Int64),
+            ("email", pl.String),
+        )
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert len(pyspark_schema.fields) == 2
+        assert pyspark_schema.fields[0].name == "id"
+        assert isinstance(pyspark_schema.fields[0].dataType, LongType)
+        assert pyspark_schema.fields[1].name == "email"
+        assert isinstance(pyspark_schema.fields[1].dataType, StringType)
+
+    def test_iterable_format_with_nested_structures(self):
+        """Test iterable format with nested struct types."""
+        polars_schema = [
+            ("name", pl.String),
+            (
+                "address",
+                pl.Struct(
+                    [
+                        pl.Field("street", pl.String),
+                        pl.Field("city", pl.String),
+                        pl.Field("zip", pl.Int32),
+                    ]
+                ),
+            ),
+        ]
+        pyspark_schema = to_pyspark_schema(polars_schema)
+
+        assert isinstance(pyspark_schema, StructType)
+        assert len(pyspark_schema.fields) == 2
+        address_field = pyspark_schema.fields[1]
+        assert address_field.name == "address"
+        assert isinstance(address_field.dataType, StructType)
+        assert len(address_field.dataType.fields) == 3
+
+    def test_all_three_formats_produce_identical_results(self):
+        """Test that all three schema formats produce identical PySpark schemas."""
+        # Format 1: Dictionary
+        schema_dict = {
+            "name": pl.String,
+            "age": pl.Int32,
+            "score": pl.Float64,
+        }
+        pyspark_dict = to_pyspark_schema(schema_dict)
+
+        # Format 2: pl.Schema object
+        schema_schema = pl.Schema(schema_dict)
+        pyspark_schema = to_pyspark_schema(schema_schema)
+
+        # Format 3: List of tuples
+        schema_list = [("name", pl.String), ("age", pl.Int32), ("score", pl.Float64)]
+        pyspark_list = to_pyspark_schema(schema_list)
+
+        # All should produce identical results
+        assert (
+            len(pyspark_dict.fields)
+            == len(pyspark_schema.fields)
+            == len(pyspark_list.fields)
+        )
+        for i in range(len(pyspark_dict.fields)):
+            assert (
+                pyspark_dict.fields[i].name
+                == pyspark_schema.fields[i].name
+                == pyspark_list.fields[i].name
+            )
+            assert (
+                type(pyspark_dict.fields[i].dataType)
+                is type(pyspark_schema.fields[i].dataType)
+                is type(pyspark_list.fields[i].dataType)
+            )
+
     def test_nested_struct_conversion(self):
         """Test conversion of nested struct types."""
         polars_schema = {
@@ -157,6 +250,22 @@ class TestPolarsToPySparkConversion:
         with pytest.raises(SchemaError):
             to_pyspark_schema("not a schema")
 
+    def test_invalid_iterable_format(self):
+        """Test that invalid iterable formats raise SchemaError."""
+        # Not a tuple
+        with pytest.raises(SchemaError):
+            to_pyspark_schema([("name", pl.String), "invalid"])
+
+        # Tuple with wrong length
+        with pytest.raises(SchemaError):
+            to_pyspark_schema([("name", pl.String, "extra")])
+
+        # Empty list should work (empty schema)
+        empty_schema = []
+        pyspark_schema = to_pyspark_schema(empty_schema)
+        assert isinstance(pyspark_schema, StructType)
+        assert len(pyspark_schema.fields) == 0
+
     def test_all_numeric_types(self):
         """Test all numeric type conversions."""
         polars_schema = {
@@ -189,7 +298,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert "name" in polars_schema
         assert polars_schema["name"] == pl.String
         assert polars_schema["age"] == pl.Int32
@@ -215,7 +324,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert isinstance(polars_schema["address"], pl.Struct)
         assert len(polars_schema["address"].fields) == 3
 
@@ -229,7 +338,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert isinstance(polars_schema["tags"], pl.List)
         assert polars_schema["tags"].inner == pl.String
         assert isinstance(polars_schema["scores"], pl.List)
@@ -244,7 +353,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert isinstance(polars_schema["matrix"], pl.List)
         assert isinstance(polars_schema["matrix"].inner, pl.List)
         assert polars_schema["matrix"].inner.inner == pl.Float64
@@ -258,7 +367,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         # MapType is converted to Struct with 'key' and 'value' fields
         assert isinstance(polars_schema["metadata"], pl.Struct)
         assert len(polars_schema["metadata"].fields) == 2
@@ -288,7 +397,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert isinstance(polars_schema["user"], pl.Struct)
         contact_field = next(
             f for f in polars_schema["user"].fields if f.name == "contact"
@@ -315,7 +424,7 @@ class TestPySparkToPolarsConversion:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["byte"] == pl.Int8
         assert polars_schema["int"] == pl.Int32
         assert polars_schema["long"] == pl.Int64
@@ -385,7 +494,7 @@ class TestNullableFields:
         # Conversion should succeed (nullable is not preserved in Polars schema)
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["required"] == pl.String
         assert polars_schema["optional"] == pl.String
 
@@ -440,7 +549,7 @@ class TestDecimalAndBinaryTypes:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["price"] == pl.Decimal
         assert polars_schema["total"] == pl.Decimal
 
@@ -454,7 +563,7 @@ class TestDecimalAndBinaryTypes:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["data"] == pl.Binary
         assert polars_schema["blob"] == pl.Binary
 
@@ -491,7 +600,7 @@ class TestEdgeCases:
         pyspark_schema = StructType([])
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert len(polars_schema) == 0
 
     def test_single_field_schema(self):
@@ -514,7 +623,14 @@ class TestEdgeCases:
         polars_schema = to_polars_schema(pyspark_schema)
 
         assert len(polars_schema) == 3
-        assert all(isinstance(t, type) for t in polars_schema.values())
+        # Types can be either classes or instances (Decimal/Datetime are instances in pl.Schema)
+        # Check that all values are valid Polars types
+        from polars.datatypes import DataType
+
+        assert all(
+            isinstance(t, type) or isinstance(t, DataType)
+            for t in polars_schema.values()
+        )
 
     def test_no_fields_nullable_pyspark(self):
         """Test PySpark schema with no fields nullable."""
@@ -546,7 +662,7 @@ class TestNewTypes:
         pyspark_schema = StructType([StructField("null_field", NullType())])
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["null_field"] == pl.Null
 
     def test_timestampntz_type_pyspark_to_polars(self):
@@ -554,7 +670,7 @@ class TestNewTypes:
         pyspark_schema = StructType([StructField("ts", TimestampNTZType())])
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["ts"] == pl.Datetime
 
     def test_categorical_enum_polars_to_pyspark(self):
@@ -579,7 +695,7 @@ class TestNewTypes:
         )
         polars_schema = to_polars_schema(pyspark_schema)
 
-        assert isinstance(polars_schema, dict)
+        assert isinstance(polars_schema, pl.Schema)
         assert polars_schema["varchar_field"] == pl.String
         assert polars_schema["char_field"] == pl.String
 
@@ -664,3 +780,124 @@ class TestInputValidation:
         # Actually, PySpark StructField requires a string name, so this test may not be possible
         # But let's test that our validation still works
         pass  # Skip this test as PySpark doesn't allow non-string names
+
+
+class TestEdgeCaseIterableValidation:
+    """Test edge cases for iterable format validation."""
+
+    def test_empty_iterable_schema(self):
+        """Test that empty iterable creates empty schema."""
+        empty_list = []
+        empty_tuple = ()
+
+        pyspark_list = to_pyspark_schema(empty_list)
+        pyspark_tuple = to_pyspark_schema(empty_tuple)
+
+        assert isinstance(pyspark_list, StructType)
+        assert isinstance(pyspark_tuple, StructType)
+        assert len(pyspark_list.fields) == 0
+        assert len(pyspark_tuple.fields) == 0
+
+    def test_non_string_field_name_in_iterable(self):
+        """Test that non-string field names in iterable raise SchemaError."""
+        with pytest.raises(SchemaError, match="Field names must be strings"):
+            to_pyspark_schema([(123, pl.String)])  # Integer field name
+
+        with pytest.raises(SchemaError, match="Field names must be strings"):
+            to_pyspark_schema([(None, pl.String)])  # None field name
+
+    def test_empty_field_name_in_iterable(self):
+        """Test that empty field names in iterable raise SchemaError."""
+        with pytest.raises(SchemaError, match="cannot be empty strings"):
+            to_pyspark_schema([("", pl.String)])
+
+    def test_duplicate_field_names_in_iterable(self):
+        """Test that duplicate field names in iterable raise SchemaError."""
+        with pytest.raises(SchemaError, match="Duplicate field name"):
+            to_pyspark_schema([("name", pl.String), ("name", pl.Int32)])
+
+    def test_very_deeply_nested_structure(self):
+        """Test conversion of very deeply nested structures."""
+        # Create a 5-level deep nested struct
+        deep_schema = {
+            "level1": pl.Struct(
+                [
+                    pl.Field(
+                        "level2",
+                        pl.Struct(
+                            [
+                                pl.Field(
+                                    "level3",
+                                    pl.Struct(
+                                        [
+                                            pl.Field(
+                                                "level4",
+                                                pl.Struct(
+                                                    [
+                                                        pl.Field("level5", pl.String),
+                                                    ]
+                                                ),
+                                            ),
+                                        ]
+                                    ),
+                                ),
+                            ]
+                        ),
+                    ),
+                ]
+            ),
+        }
+
+        pyspark_schema = to_pyspark_schema(deep_schema)
+        assert isinstance(pyspark_schema, StructType)
+
+        # Navigate through the levels
+        level1 = pyspark_schema.fields[0]
+        assert isinstance(level1.dataType, StructType)
+        level2 = level1.dataType.fields[0]
+        assert isinstance(level2.dataType, StructType)
+        level3 = level2.dataType.fields[0]
+        assert isinstance(level3.dataType, StructType)
+        level4 = level3.dataType.fields[0]
+        assert isinstance(level4.dataType, StructType)
+        level5 = level4.dataType.fields[0]
+        assert isinstance(level5.dataType, StringType)
+
+    def test_deeply_nested_arrays(self):
+        """Test conversion of deeply nested arrays."""
+        # 4 levels of nested arrays
+        deep_array_schema = {
+            "deep": pl.List(pl.List(pl.List(pl.List(pl.String)))),
+        }
+
+        pyspark_schema = to_pyspark_schema(deep_array_schema)
+        assert isinstance(pyspark_schema, StructType)
+
+        deep_field = pyspark_schema.fields[0]
+        assert isinstance(deep_field.dataType, ArrayType)
+
+        # Navigate through nested arrays
+        level1 = deep_field.dataType.elementType
+        assert isinstance(level1, ArrayType)
+        level2 = level1.elementType
+        assert isinstance(level2, ArrayType)
+        level3 = level2.elementType
+        assert isinstance(level3, ArrayType)
+        level4 = level3.elementType
+        assert isinstance(level4, StringType)
+
+    def test_iterable_with_wrong_tuple_length(self):
+        """Test iterable with tuples of wrong length."""
+        with pytest.raises(SchemaError, match="has length"):
+            to_pyspark_schema([("name",)])  # Too short
+
+        with pytest.raises(SchemaError, match="has length"):
+            to_pyspark_schema([("name", pl.String, "extra")])  # Too long
+
+    def test_iterable_with_non_tuple_items(self):
+        """Test iterable with non-tuple items."""
+        with pytest.raises(SchemaError, match="is not a tuple"):
+            to_pyspark_schema(["not", "tuples"])
+
+        with pytest.raises(SchemaError, match="is not a tuple"):
+            to_pyspark_schema([("name", pl.String), {"not": "tuple"}])

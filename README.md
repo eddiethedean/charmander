@@ -22,20 +22,41 @@ pip install charmander
 
 ### Converting Polars Schema to PySpark
 
+Charmander supports **three Polars schema formats** - use whichever is most convenient:
+
 ```python
 import polars as pl
 from charmander import to_pyspark_schema
 
-# Define a Polars schema
-polars_schema = {
+# Format 1: Dictionary
+polars_schema_dict = {
     "name": pl.String,
     "age": pl.Int32,
     "score": pl.Float64,
     "tags": pl.List(pl.String),
 }
 
-# Convert to PySpark schema
-pyspark_schema = to_pyspark_schema(polars_schema)
+# Format 2: pl.Schema object
+polars_schema_schema = pl.Schema({
+    "name": pl.String,
+    "age": pl.Int32,
+    "score": pl.Float64,
+    "tags": pl.List(pl.String),
+})
+
+# Format 3: List of tuples
+polars_schema_list = [
+    ("name", pl.String),
+    ("age", pl.Int32),
+    ("score", pl.Float64),
+    ("tags", pl.List(pl.String)),
+]
+
+# All three formats work identically!
+pyspark_schema = to_pyspark_schema(polars_schema_dict)
+# or: to_pyspark_schema(polars_schema_schema)
+# or: to_pyspark_schema(polars_schema_list)
+
 print(pyspark_schema)
 # StructType([StructField('name', StringType(), True),
 #             StructField('age', IntegerType(), True),
@@ -60,16 +81,21 @@ pyspark_schema = StructType([
 # Convert to Polars schema
 polars_schema = to_polars_schema(pyspark_schema)
 print(polars_schema)
-# {'name': <class 'polars.datatypes.String'>, 'age': <class 'polars.datatypes.Int32'>, ...}
+# Schema({'name': <class 'polars.datatypes.String'>, 'age': <class 'polars.datatypes.Int32'>, ...})
+
+# Use directly with Polars DataFrame
+df = pl.DataFrame({}, schema=polars_schema)
 ```
 
 ## Features
 
-- **Bidirectional Conversion**: Convert schemas in both directions
+- **Bidirectional Conversion**: Convert schemas in both directions (Polars ↔ PySpark)
+- **Multiple Schema Formats**: Supports `pl.Schema`, `dict[str, pl.DataType]`, and `Iterable[tuple[str, pl.DataType]]` formats
+- **Native Polars Integration**: Returns `pl.Schema` objects from `to_polars_schema` for seamless DataFrame integration
 - **Comprehensive Type Support**: Supports all primitive and complex types
 - **Nested Structures**: Handles deeply nested structs, arrays, and maps
 - **Type Safety**: Clear error messages for unsupported types
-- **Simple API**: Functional, stateless functions
+- **Simple API**: Functional, stateless functions - easy to use and understand
 
 ## Supported Types
 
@@ -206,7 +232,7 @@ pyspark_schema = to_pyspark_schema(polars_schema)
 import polars as pl
 from charmander import to_pyspark_schema, to_polars_schema
 
-# Start with Polars schema
+# Start with Polars schema (any format works)
 original = {
     "name": pl.String,
     "age": pl.Int32,
@@ -215,28 +241,62 @@ original = {
 
 # Convert to PySpark and back
 pyspark = to_pyspark_schema(original)
-converted_back = to_polars_schema(pyspark)
+converted_back = to_polars_schema(pyspark)  # Returns pl.Schema
 
-# Verify types match
+# Verify types match (pl.Schema supports dict-like access)
 assert converted_back["name"] == original["name"]
 assert converted_back["age"] == original["age"]
+assert isinstance(converted_back, pl.Schema)
 ```
 
 ## Error Handling
 
-Charmander provides clear error messages through custom exceptions:
+Charmander provides clear error messages through custom exceptions. All exceptions inherit from `ConversionError`, so you can catch all conversion errors at once or handle them individually:
 
 ```python
 from charmander import ConversionError, UnsupportedTypeError, SchemaError
 
+# Example 1: Handle specific error types
 try:
     schema = to_pyspark_schema(invalid_schema)
 except SchemaError as e:
-    print(f"Invalid schema: {e}")
+    print(f"Invalid schema structure: {e}")
+    # Handles: duplicate field names, empty field names, invalid field types, etc.
 except UnsupportedTypeError as e:
     print(f"Unsupported type: {e}")
+    # Handles: types that cannot be converted between Polars and PySpark
 except ConversionError as e:
-    print(f"Conversion error: {e}")
+    print(f"General conversion error: {e}")
+    # Catches all conversion-related errors (base class)
+
+# Example 2: Catch all conversion errors
+try:
+    schema = to_pyspark_schema(invalid_schema)
+except ConversionError as e:
+    print(f"Conversion failed: {e}")
+    # This will catch SchemaError, UnsupportedTypeError, and any future error types
+
+# Example 3: Common error scenarios
+try:
+    # Invalid iterable format
+    schema = to_pyspark_schema([("name", pl.String), "invalid"])
+except SchemaError as e:
+    print(f"Schema validation failed: {e}")
+    # Output: "Invalid schema format: <class 'list'>. Expected iterable of (field_name, type) tuples. Item at index 1 is not a tuple: 'invalid'"
+
+try:
+    # Duplicate field names
+    schema = to_pyspark_schema([("name", pl.String), ("name", pl.Int32)])
+except SchemaError as e:
+    print(f"Duplicate field: {e}")
+    # Output: "Invalid schema format: <class 'list'>. Duplicate field name found: 'name'"
+
+try:
+    # Unsupported type
+    schema = to_pyspark_schema({"field": some_unsupported_type})
+except UnsupportedTypeError as e:
+    print(f"Unsupported type: {e}")
+    # Output includes list of supported types
 ```
 
 ## API Reference
@@ -246,7 +306,10 @@ except ConversionError as e:
 Convert a Polars schema to a PySpark `StructType`.
 
 **Parameters:**
-- `polars_schema` (dict or `pl.Schema`): Polars schema as a dictionary mapping field names to types, or a `polars.Schema` object
+- `polars_schema`: Polars schema in any supported format:
+  - `pl.Schema` object
+  - `dict[str, pl.DataType]`: Dictionary mapping field names to types
+  - `Iterable[tuple[str, pl.DataType]]`: Iterable of (field_name, type) tuples (e.g., list or tuple of tuples)
 
 **Returns:**
 - `pyspark.sql.types.StructType`: PySpark schema
@@ -255,19 +318,47 @@ Convert a Polars schema to a PySpark `StructType`.
 - `SchemaError`: If the schema structure is invalid
 - `UnsupportedTypeError`: If a type cannot be converted
 
+**Example:**
+```python
+import polars as pl
+from charmander import to_pyspark_schema
+
+# All three formats work:
+schema1 = {"name": pl.String, "age": pl.Int32}
+schema2 = pl.Schema({"name": pl.String, "age": pl.Int32})
+schema3 = [("name", pl.String), ("age", pl.Int32)]
+
+pyspark_schema = to_pyspark_schema(schema1)  # or schema2, or schema3
+```
+
 ### `to_polars_schema(pyspark_schema)`
 
-Convert a PySpark `StructType` to a Polars schema dictionary.
+Convert a PySpark `StructType` to a Polars schema.
 
 **Parameters:**
 - `pyspark_schema` (`pyspark.sql.types.StructType`): PySpark schema
 
 **Returns:**
-- `dict`: Dictionary mapping field names to Polars types
+- `pl.Schema`: Polars Schema object mapping field names to Polars types
 
 **Raises:**
 - `SchemaError`: If the schema structure is invalid
 - `UnsupportedTypeError`: If a type cannot be converted
+
+**Example:**
+```python
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from charmander import to_polars_schema
+
+pyspark_schema = StructType([
+    StructField("name", StringType()),
+    StructField("age", IntegerType())
+])
+
+polars_schema = to_polars_schema(pyspark_schema)
+# Returns pl.Schema object - use directly with Polars DataFrames
+df = pl.DataFrame({}, schema=polars_schema)
+```
 
 ## Development
 

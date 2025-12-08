@@ -106,7 +106,9 @@ def _init_mappings():
 _init_mappings()
 
 
-def get_pyspark_type(polars_type: Any) -> Type:
+def get_pyspark_type(polars_type: Any) -> Type:  # type: ignore[no-any-unused]
+    # polars_type can be a class (pl.String) or instance (pl.Decimal(...), pl.List(...))
+    # so Any is used to accept both
     """
     Get the corresponding PySpark type for a Polars type.
 
@@ -152,7 +154,9 @@ def get_pyspark_type(polars_type: Any) -> Type:
     )
 
 
-def get_polars_type(pyspark_type: Any) -> Type:
+def get_polars_type(pyspark_type: Any) -> Type:  # type: ignore[no-any-unused]
+    # pyspark_type can be a class (StringType) or instance (ArrayType(...), StructType(...))
+    # so Any is used to accept both
     """
     Get the corresponding Polars type for a PySpark type.
 
